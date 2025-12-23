@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Build output (optional - some prefer to commit main.js)
+# main.js
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Obsidian
+data.json

@@ -1,0 +1,548 @@
+import { Editor, Plugin, PluginSettingTab, App, Setting, MarkdownView } from 'obsidian';
+
+// ============================================================================
+//  Settings
+// ============================================================================
+
+interface SmartPasteSettings {
+	enabled: boolean;
+	cleanEmptyLines: boolean;
+	indentStyle: 'auto' | 'tab' | 'spaces';
+	spacesPerIndent: number;
+}
+
+const DEFAULT_SETTINGS: SmartPasteSettings = {
+	enabled: true,
+	cleanEmptyLines: true,
+	indentStyle: 'auto',
+	spacesPerIndent: 2
+};
+
+// ============================================================================
+//  Main Plugin
+// ============================================================================
+
+export default class SmartPastePlugin extends Plugin {
+	settings: SmartPasteSettings;
+	private pasteHandler: (evt: ClipboardEvent) => void;
+
+	async onload() {
+		await this.loadSettings();
+
+		// 使用 DOM 捕获阶段事件，优先于其他插件
+		this.pasteHandler = this.handlePaste.bind(this);
+		document.addEventListener('paste', this.pasteHandler, true);  // true = 捕获阶段
+
+		// 添加命令：切换智能粘贴
+		this.addCommand({
+			id: 'toggle-smart-paste',
+			name: 'Toggle Smart Paste',
+			callback: () => {
+				this.settings.enabled = !this.settings.enabled;
+				this.saveSettings();
+			}
+		});
+
+		// 添加设置面板
+		this.addSettingTab(new SmartPasteSettingTab(this.app, this));
+
+		console.log('Smart Paste plugin loaded');
+	}
+
+	onunload() {
+		document.removeEventListener('paste', this.pasteHandler, true);
+		console.log('Smart Paste plugin unloaded');
+	}
+
+	// ------------------------------------------------------------------------
+	//  粘贴事件处理
+	// ------------------------------------------------------------------------
+
+	handlePaste(evt: ClipboardEvent) {
+		console.log('[SmartPaste] handlePaste triggered (capture phase)');
+
+		// 如果禁用，直接返回
+		if (!this.settings.enabled) {
+			console.log('[SmartPaste] Disabled, skipping');
+			return;
+		}
+
+		// 获取当前活跃的 MarkdownView
+		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!activeView) {
+			console.log('[SmartPaste] No active MarkdownView, skipping');
+			return;
+		}
+
+		const editor = activeView.editor;
+
+		// 尝试获取 HTML 格式，否则用纯文本
+		const clipboardHtml = evt.clipboardData?.getData('text/html');
+		const clipboardText = evt.clipboardData?.getData('text/plain');
+
+		console.log('[SmartPaste] clipboardHtml:', clipboardHtml?.substring(0, 500));
+		console.log('[SmartPaste] clipboardText:', clipboardText?.substring(0, 100));
+
+		if (!clipboardText && !clipboardHtml) {
+			console.log('[SmartPaste] No clipboard content, returning');
+			return;
+		}
+
+		// 阻止默认粘贴和事件传播
+		evt.preventDefault();
+		evt.stopPropagation();
+		console.log('[SmartPaste] Default prevented, processing...');
+
+		// 检测是否在代码块内
+		if (this.isInsideCodeBlock(editor)) {
+			editor.replaceSelection(clipboardText || '');
+			return;
+		}
+
+		// 获取当前行信息
+		const cursor = editor.getCursor();
+		const currentLine = editor.getLine(cursor.line);
+		const baseIndent = this.getLeadingWhitespace(currentLine);
+
+		// 检测当前行是否是 bullet，获取 bullet 前缀
+		const bulletPrefix = this.detectBulletPrefix(currentLine);
+
+		console.log('[SmartPaste] baseIndent:', JSON.stringify(baseIndent));
+		console.log('[SmartPaste] bulletPrefix:', JSON.stringify(bulletPrefix));
+
+		// 如果有 HTML，尝试解析成 Markdown
+		let contentToProcess: string;
+		if (clipboardHtml) {
+			contentToProcess = this.htmlToMarkdown(clipboardHtml);
+			console.log('[SmartPaste] converted markdown:', contentToProcess.substring(0, 300));
+		} else {
+			contentToProcess = clipboardText || '';
+		}
+
+		// 处理粘贴内容
+		const processed = this.processContent(contentToProcess, baseIndent, bulletPrefix);
+		console.log('[SmartPaste] processed result:', processed.substring(0, 200));
+		editor.replaceSelection(processed);
+	}
+
+	// ------------------------------------------------------------------------
+	//  HTML 转 Markdown
+	// ------------------------------------------------------------------------
+
+	htmlToMarkdown(html: string): string {
+		// 创建临时 DOM 解析 HTML
+		const parser = new DOMParser();
+		const doc = parser.parseFromString(html, 'text/html');
+
+		// 递归转换
+		return this.convertNodeToMarkdown(doc.body, 0);
+	}
+
+	convertNodeToMarkdown(node: Node, depth: number): string {
+		const results: string[] = [];
+		const indent = '\t'.repeat(depth);
+		let prevWasParagraph = false;  // 追踪前一个元素是否是段落
+
+		for (const child of Array.from(node.childNodes)) {
+			if (child.nodeType === Node.TEXT_NODE) {
+				const text = child.textContent?.trim();
+				if (text) {
+					// 独立文本也变成 bullet
+					results.push(indent + '- ' + text);
+					prevWasParagraph = true;
+				}
+			} else if (child.nodeType === Node.ELEMENT_NODE) {
+				const el = child as HTMLElement;
+				const tagName = el.tagName.toLowerCase();
+
+				if (tagName === 'ul' || tagName === 'ol') {
+					// 列表：如果前面是段落，作为子项需要缩进一层
+					const listDepth = prevWasParagraph ? depth + 1 : depth;
+					const listItems = this.convertListToMarkdown(el, listDepth);
+					results.push(listItems);
+					prevWasParagraph = false;
+				} else if (tagName === 'li') {
+					// 列表项
+					const text = this.getDirectTextContent(el);
+					if (text) {
+						results.push(indent + '- ' + text);
+					}
+					// 处理嵌套列表
+					for (const subChild of Array.from(el.children)) {
+						if (subChild.tagName.toLowerCase() === 'ul' || subChild.tagName.toLowerCase() === 'ol') {
+							results.push(this.convertListToMarkdown(subChild as HTMLElement, depth + 1));
+						}
+					}
+					prevWasParagraph = false;
+				} else if (tagName === 'p' || tagName === 'div') {
+					// 段落也变成 bullet
+					const text = this.getDirectTextContent(el);
+					if (text) {
+						results.push(indent + '- ' + text);
+						prevWasParagraph = true;
+					}
+				} else if (tagName === 'br') {
+					// 换行 - 不改变状态
+				} else if (tagName === 'h1' || tagName === 'h2' || tagName === 'h3' || tagName === 'h4' || tagName === 'h5' || tagName === 'h6') {
+					// 标题也变成 bullet
+					const text = el.textContent?.trim();
+					if (text) {
+						results.push(indent + '- ' + text);
+						prevWasParagraph = true;
+					}
+				} else if (tagName === 'strong' || tagName === 'b') {
+					const text = el.textContent?.trim();
+					if (text) {
+						results.push(indent + '- **' + text + '**');
+						prevWasParagraph = true;
+					}
+				} else if (tagName === 'em' || tagName === 'i') {
+					const text = el.textContent?.trim();
+					if (text) {
+						results.push(indent + '- *' + text + '*');
+						prevWasParagraph = true;
+					}
+				} else if (tagName === 'span') {
+					// span 通常是内联元素，检查是否有独立文本
+					const text = el.textContent?.trim();
+					if (text) {
+						results.push(indent + '- ' + text);
+						prevWasParagraph = true;
+					}
+				} else {
+					// 其他元素：递归处理
+					const inner = this.convertNodeToMarkdown(el, depth);
+					if (inner) {
+						results.push(inner);
+						prevWasParagraph = false;
+					}
+				}
+			}
+		}
+
+		return results.join('\n');
+	}
+
+	convertListToMarkdown(listEl: HTMLElement, depth: number): string {
+		const results: string[] = [];
+		const indent = '\t'.repeat(depth);
+		const isOrdered = listEl.tagName.toLowerCase() === 'ol';
+		let counter = 1;
+
+		for (const li of Array.from(listEl.children)) {
+			if (li.tagName.toLowerCase() === 'li') {
+				const text = this.getDirectTextContent(li as HTMLElement);
+				const bullet = isOrdered ? `${counter}. ` : '- ';
+				if (text) {
+					results.push(indent + bullet + text);
+				}
+				counter++;
+
+				// 处理嵌套列表
+				for (const subChild of Array.from(li.children)) {
+					const subTag = subChild.tagName.toLowerCase();
+					if (subTag === 'ul' || subTag === 'ol') {
+						results.push(this.convertListToMarkdown(subChild as HTMLElement, depth + 1));
+					}
+				}
+			}
+		}
+
+		return results.join('\n');
+	}
+
+	// 获取元素的直接文本内容（不包括子元素）
+	getDirectTextContent(el: HTMLElement): string {
+		let text = '';
+		for (const child of Array.from(el.childNodes)) {
+			if (child.nodeType === Node.TEXT_NODE) {
+				text += child.textContent || '';
+			} else if (child.nodeType === Node.ELEMENT_NODE) {
+				const childEl = child as HTMLElement;
+				const tag = childEl.tagName.toLowerCase();
+				// 处理内联格式
+				if (tag === 'strong' || tag === 'b') {
+					text += '**' + childEl.textContent + '**';
+				} else if (tag === 'em' || tag === 'i') {
+					text += '*' + childEl.textContent + '*';
+				} else if (tag === 'code') {
+					text += '`' + childEl.textContent + '`';
+				} else if (tag !== 'ul' && tag !== 'ol') {
+					text += this.getDirectTextContent(childEl);  // 递归处理，保留格式
+				}
+			}
+		}
+		return text.trim();
+	}
+
+	// ------------------------------------------------------------------------
+	//  核心处理逻辑
+	// ------------------------------------------------------------------------
+
+	processContent(text: string, baseIndent: string, bulletPrefix: string): string {
+		const lines = text.split('\n');
+		if (lines.length === 0) return text;
+
+		// 找到最小缩进长度（直接用字符数，不转换层级）
+		let minIndentLength = Infinity;
+		for (const line of lines) {
+			if (!line.trim()) continue;
+			const indent = this.getLeadingWhitespace(line);
+			minIndentLength = Math.min(minIndentLength, indent.length);
+		}
+		if (minIndentLength === Infinity) minIndentLength = 0;
+
+		console.log('[SmartPaste] minIndentLength:', minIndentLength);
+
+		// 重新生成每行，保留原始相对缩进
+		const processedLines = lines.map((line, index) => {
+			if (!line.trim()) return '';
+
+			const originalIndent = this.getLeadingWhitespace(line);
+			// 相对缩进 = 原始缩进去掉最小缩进部分
+			const relativeIndent = originalIndent.slice(minIndentLength);
+			let content = line.slice(originalIndent.length);  // 去掉缩进后的内容
+
+			if (index === 0) {
+				// 第一行：如果当前环境有 bullet，且内容也以 bullet 开头，去掉重复的 bullet
+				if (bulletPrefix && this.startsWithBullet(content)) {
+					content = this.stripBullet(content);
+				}
+				return content;
+			} else {
+				// 后续行：baseIndent + 相对缩进 + 内容
+				return baseIndent + relativeIndent + content;
+			}
+		});
+
+		// 清理空行
+		const cleaned = this.settings.cleanEmptyLines
+			? this.cleanEmptyLines(processedLines)
+			: processedLines;
+
+		return cleaned.join('\n');
+	}
+
+	// 检测内容是否以 bullet 开头
+	startsWithBullet(text: string): boolean {
+		return /^[-*+]\s|^\d+\.\s/.test(text);
+	}
+
+	// 去掉行首的 bullet
+	stripBullet(text: string): string {
+		return text.replace(/^[-*+]\s+/, '').replace(/^\d+\.\s+/, '');
+	}
+
+	// 检测当前行的 bullet 前缀
+	detectBulletPrefix(line: string): string {
+		// 匹配 "- ", "* ", "+ ", "1. " 等
+		const match = line.match(/^\s*([-*+]|\d+\.)\s+/);
+		if (match) {
+			// 返回 bullet 符号 + 空格，如 "- "
+			const bullet = match[1];
+			return bullet.match(/^\d+$/) ? '- ' : bullet + ' ';  // 数字列表转换为 -
+		}
+		return '';
+	}
+
+	// ------------------------------------------------------------------------
+	//  缩进工具函数
+	// ------------------------------------------------------------------------
+
+	// 获取行首空白字符
+	getLeadingWhitespace(line: string): string {
+		const match = line.match(/^(\s*)/);
+		return match ? match[1] : '';
+	}
+
+	// 检测文本使用的缩进风格
+	detectIndentStyle(text: string): string {
+		const lines = text.split('\n');
+		let tabCount = 0;
+		let spaceCount = 0;
+
+		for (const line of lines) {
+			const indent = this.getLeadingWhitespace(line);
+			if (indent.includes('\t')) tabCount++;
+			else if (indent.includes('  ')) spaceCount++;
+		}
+
+		// 如果设置为自动，根据内容判断
+		if (this.settings.indentStyle === 'auto') {
+			return tabCount > spaceCount ? '\t' : '  ';
+		}
+		return this.settings.indentStyle === 'tab' ? '\t' : ' '.repeat(this.settings.spacesPerIndent);
+	}
+
+	// 计算最小缩进层级
+	calculateMinIndentLevel(lines: string[], indentChar: string): number {
+		let minLevel = Infinity;
+
+		for (const line of lines) {
+			if (line.trim().length === 0) continue;
+			const indent = this.getLeadingWhitespace(line);
+			const level = this.countIndentUnits(indent, indentChar);
+			if (level < minLevel) {
+				minLevel = level;
+			}
+		}
+
+		return minLevel === Infinity ? 0 : minLevel;
+	}
+
+	// 计算缩进单位数
+	countIndentUnits(indent: string, indentChar: string): number {
+		if (indentChar === '\t') {
+			return indent.split('\t').length - 1;
+		}
+		// 空格缩进
+		const unitSize = this.settings.spacesPerIndent;
+		return Math.floor(indent.length / unitSize);
+	}
+
+	// 生成指定层级的缩进
+	generateIndent(level: number): string {
+		if (level <= 0) return '';
+
+		if (this.settings.indentStyle === 'tab') {
+			return '\t'.repeat(level);
+		}
+		return ' '.repeat(level * this.settings.spacesPerIndent);
+	}
+
+	// ------------------------------------------------------------------------
+	//  空行清理
+	// ------------------------------------------------------------------------
+
+	cleanEmptyLines(lines: string[]): string[] {
+		const result: string[] = [];
+		let prevWasEmpty = false;
+		let prevWasBullet = false;
+
+		for (const line of lines) {
+			const isEmpty = line.trim().length === 0;
+			const isBullet = /^\s*[-*+]\s/.test(line) || /^\s*\d+\.\s/.test(line);
+
+			// 如果当前是空行，且前一行是 bullet，跳过
+			if (isEmpty && prevWasBullet) {
+				prevWasEmpty = true;
+				continue;
+			}
+
+			// 如果当前是 bullet，且前一行是空行，不添加空行
+			if (isBullet && prevWasEmpty) {
+				// 跳过空行，直接添加 bullet
+			}
+
+			// 跳过连续空行
+			if (isEmpty && prevWasEmpty) continue;
+
+			result.push(line);
+			prevWasEmpty = isEmpty;
+			prevWasBullet = isBullet;
+		}
+
+		return result;
+	}
+
+	// ------------------------------------------------------------------------
+	//  代码块检测
+	// ------------------------------------------------------------------------
+
+	isInsideCodeBlock(editor: Editor): boolean {
+		const cursor = editor.getCursor();
+		const content = editor.getValue();
+		const lines = content.split('\n');
+
+		let inCodeBlock = false;
+		for (let i = 0; i <= cursor.line; i++) {
+			const line = lines[i];
+			if (line.startsWith('```')) {
+				inCodeBlock = !inCodeBlock;
+			}
+		}
+
+		return inCodeBlock;
+	}
+
+	// ------------------------------------------------------------------------
+	//  设置
+	// ------------------------------------------------------------------------
+
+	async loadSettings() {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	}
+
+	async saveSettings() {
+		await this.saveData(this.settings);
+	}
+}
+
+// ============================================================================
+//  设置面板
+// ============================================================================
+
+class SmartPasteSettingTab extends PluginSettingTab {
+	plugin: SmartPastePlugin;
+
+	constructor(app: App, plugin: SmartPastePlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+
+	display(): void {
+		const { containerEl } = this;
+		containerEl.empty();
+
+		containerEl.createEl('h2', { text: 'Smart Paste Settings' });
+
+		// 启用开关
+		new Setting(containerEl)
+			.setName('Enable Smart Paste')
+			.setDesc('Toggle intelligent paste with preserved indentation')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enabled)
+				.onChange(async (value) => {
+					this.plugin.settings.enabled = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// 空行清理
+		new Setting(containerEl)
+			.setName('Clean Empty Lines')
+			.setDesc('Remove extra empty lines between bullet points')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.cleanEmptyLines)
+				.onChange(async (value) => {
+					this.plugin.settings.cleanEmptyLines = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// 缩进风格
+		new Setting(containerEl)
+			.setName('Indent Style')
+			.setDesc('Choose indentation style for pasted content')
+			.addDropdown(dropdown => dropdown
+				.addOption('auto', 'Auto detect')
+				.addOption('tab', 'Tab')
+				.addOption('spaces', 'Spaces')
+				.setValue(this.plugin.settings.indentStyle)
+				.onChange(async (value: 'auto' | 'tab' | 'spaces') => {
+					this.plugin.settings.indentStyle = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// 空格数
+		new Setting(containerEl)
+			.setName('Spaces per Indent')
+			.setDesc('Number of spaces per indent level (when using spaces)')
+			.addSlider(slider => slider
+				.setLimits(2, 8, 2)
+				.setValue(this.plugin.settings.spacesPerIndent)
+				.setDynamicTooltip()
+				.onChange(async (value) => {
+					this.plugin.settings.spacesPerIndent = value;
+					await this.plugin.saveSettings();
+				}));
+	}
+}

@@ -1,0 +1,9 @@
+{
+	"id": "smart-paste",
+	"name": "Smart Paste",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "Intelligently paste content with preserved relative indentation and cleaned empty lines",
+	"author": "Linus",
+	"isDesktopOnly": false
+}
