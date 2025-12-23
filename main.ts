@@ -67,6 +67,13 @@ export default class SmartPastePlugin extends Plugin {
 			return;
 		}
 
+		// 检查粘贴目标是否在编辑器区域内
+		const target = evt.target as HTMLElement;
+		if (!target?.closest('.cm-editor, .markdown-source-view')) {
+			console.log('[SmartPaste] Not in editor area, skipping');
+			return;  // 不在编辑器内，让默认行为处理（如文件标题、搜索框等）
+		}
+
 		// 获取当前活跃的 MarkdownView
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!activeView) {

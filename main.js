@@ -58,6 +58,11 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
       console.log("[SmartPaste] Disabled, skipping");
       return;
     }
+    const target = evt.target;
+    if (!target?.closest(".cm-editor, .markdown-source-view")) {
+      console.log("[SmartPaste] Not in editor area, skipping");
+      return;
+    }
     const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
     if (!activeView) {
       console.log("[SmartPaste] No active MarkdownView, skipping");
