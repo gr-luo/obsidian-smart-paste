@@ -24,7 +24,8 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
 var DEFAULT_SETTINGS = {
-  enabled: true,
+  pasteMode: "manual",
+  // 默认手动模式，更安全
   cleanEmptyLines: true,
   indentStyle: "auto",
   spacesPerIndent: 2
@@ -35,11 +36,20 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
     this.pasteHandler = this.handlePaste.bind(this);
     document.addEventListener("paste", this.pasteHandler, true);
     this.addCommand({
-      id: "toggle-smart-paste",
-      name: "Toggle Smart Paste",
+      id: "smart-paste",
+      name: "Paste with Smart Formatting",
+      editorCallback: (editor) => {
+        this.executeSmartPaste(editor);
+      }
+    });
+    this.addCommand({
+      id: "toggle-paste-mode",
+      name: "Toggle Paste Mode (Auto/Manual)",
       callback: () => {
-        this.settings.enabled = !this.settings.enabled;
+        this.settings.pasteMode = this.settings.pasteMode === "auto" ? "manual" : "auto";
         this.saveSettings();
+        const mode = this.settings.pasteMode === "auto" ? "\u81EA\u52A8\u52AB\u6301" : "\u624B\u52A8\u89E6\u53D1";
+        console.log(`[SmartPaste] \u5207\u6362\u5230${mode}\u6A21\u5F0F`);
       }
     });
     this.addSettingTab(new SmartPasteSettingTab(this.app, this));
@@ -50,17 +60,18 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
     console.log("Smart Paste plugin unloaded");
   }
   // ------------------------------------------------------------------------
-  //  粘贴事件处理
+  //  粘贴事件处理（仅 auto 模式生效）
   // ------------------------------------------------------------------------
   handlePaste(evt) {
-    console.log("[SmartPaste] handlePaste triggered (capture phase)");
-    if (!this.settings.enabled) {
-      console.log("[SmartPaste] Disabled, skipping");
+    if (this.settings.pasteMode !== "auto") {
       return;
     }
+    console.log("[SmartPaste] handlePaste triggered (capture phase, auto mode)");
     const target = evt.target;
-    if (!target?.closest(".cm-editor, .markdown-source-view")) {
-      console.log("[SmartPaste] Not in editor area, skipping");
+    const isInEditor = target?.closest(".cm-editor, .markdown-source-view");
+    const isInTitle = target?.closest(".inline-title, .view-header-title-container");
+    if (!isInEditor || isInTitle) {
+      console.log("[SmartPaste] Not in editor content area, skipping");
       return;
     }
     const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
@@ -99,6 +110,50 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
     }
     const processed = this.processContent(contentToProcess, baseIndent, bulletPrefix);
     console.log("[SmartPaste] processed result:", processed.substring(0, 200));
+    editor.replaceSelection(processed);
+  }
+  // ------------------------------------------------------------------------
+  //  手动智能粘贴（命令面板/快捷键触发）
+  // ------------------------------------------------------------------------
+  async executeSmartPaste(editor) {
+    console.log("[SmartPaste] executeSmartPaste triggered (manual mode)");
+    if (this.isInsideCodeBlock(editor)) {
+      const text = await navigator.clipboard.readText();
+      editor.replaceSelection(text);
+      return;
+    }
+    const cursor = editor.getCursor();
+    const currentLine = editor.getLine(cursor.line);
+    const baseIndent = this.getLeadingWhitespace(currentLine);
+    const bulletPrefix = this.detectBulletPrefix(currentLine);
+    let clipboardHtml = "";
+    let clipboardText = "";
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+      for (const item of clipboardItems) {
+        if (item.types.includes("text/html")) {
+          const blob = await item.getType("text/html");
+          clipboardHtml = await blob.text();
+        }
+        if (item.types.includes("text/plain")) {
+          const blob = await item.getType("text/plain");
+          clipboardText = await blob.text();
+        }
+      }
+    } catch (e) {
+      clipboardText = await navigator.clipboard.readText();
+    }
+    if (!clipboardText && !clipboardHtml) {
+      console.log("[SmartPaste] No clipboard content");
+      return;
+    }
+    let contentToProcess;
+    if (clipboardHtml) {
+      contentToProcess = this.htmlToMarkdown(clipboardHtml);
+    } else {
+      contentToProcess = clipboardText;
+    }
+    const processed = this.processContent(contentToProcess, baseIndent, bulletPrefix);
     editor.replaceSelection(processed);
   }
   // ------------------------------------------------------------------------
@@ -393,8 +448,8 @@ var SmartPasteSettingTab = class extends import_obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Smart Paste Settings" });
-    new import_obsidian.Setting(containerEl).setName("Enable Smart Paste").setDesc("Toggle intelligent paste with preserved indentation").addToggle((toggle) => toggle.setValue(this.plugin.settings.enabled).onChange(async (value) => {
-      this.plugin.settings.enabled = value;
+    new import_obsidian.Setting(containerEl).setName("Paste Mode").setDesc("Auto: hijack all paste events. Manual: use Cmd+Shift+V or command palette.").addDropdown((dropdown) => dropdown.addOption("manual", "Manual (safer)").addOption("auto", "Auto (experimental)").setValue(this.plugin.settings.pasteMode).onChange(async (value) => {
+      this.plugin.settings.pasteMode = value;
       await this.plugin.saveSettings();
     }));
     new import_obsidian.Setting(containerEl).setName("Clean Empty Lines").setDesc("Remove extra empty lines between bullet points").addToggle((toggle) => toggle.setValue(this.plugin.settings.cleanEmptyLines).onChange(async (value) => {

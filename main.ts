@@ -5,14 +5,14 @@ import { Editor, Plugin, PluginSettingTab, App, Setting, MarkdownView } from 'ob
 // ============================================================================
 
 interface SmartPasteSettings {
-	enabled: boolean;
+	pasteMode: 'auto' | 'manual';
 	cleanEmptyLines: boolean;
 	indentStyle: 'auto' | 'tab' | 'spaces';
 	spacesPerIndent: number;
 }
 
 const DEFAULT_SETTINGS: SmartPasteSettings = {
-	enabled: true,
+	pasteMode: 'manual',  // 默认手动模式，更安全
 	cleanEmptyLines: true,
 	indentStyle: 'auto',
 	spacesPerIndent: 2
@@ -29,17 +29,28 @@ export default class SmartPastePlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		// 使用 DOM 捕获阶段事件，优先于其他插件
+		// 使用 DOM 捕获阶段事件，优先于其他插件（仅 auto 模式生效）
 		this.pasteHandler = this.handlePaste.bind(this);
 		document.addEventListener('paste', this.pasteHandler, true);  // true = 捕获阶段
 
-		// 添加命令：切换智能粘贴
+		// 命令：手动触发智能粘贴（可绑定快捷键如 Cmd+Shift+V）
 		this.addCommand({
-			id: 'toggle-smart-paste',
-			name: 'Toggle Smart Paste',
+			id: 'smart-paste',
+			name: 'Paste with Smart Formatting',
+			editorCallback: (editor) => {
+				this.executeSmartPaste(editor);
+			}
+		});
+
+		// 命令：切换粘贴模式
+		this.addCommand({
+			id: 'toggle-paste-mode',
+			name: 'Toggle Paste Mode (Auto/Manual)',
 			callback: () => {
-				this.settings.enabled = !this.settings.enabled;
+				this.settings.pasteMode = this.settings.pasteMode === 'auto' ? 'manual' : 'auto';
 				this.saveSettings();
+				const mode = this.settings.pasteMode === 'auto' ? '自动劫持' : '手动触发';
+				console.log(`[SmartPaste] 切换到${mode}模式`);
 			}
 		});
 
@@ -55,23 +66,25 @@ export default class SmartPastePlugin extends Plugin {
 	}
 
 	// ------------------------------------------------------------------------
-	//  粘贴事件处理
+	//  粘贴事件处理（仅 auto 模式生效）
 	// ------------------------------------------------------------------------
 
 	handlePaste(evt: ClipboardEvent) {
-		console.log('[SmartPaste] handlePaste triggered (capture phase)');
-
-		// 如果禁用，直接返回
-		if (!this.settings.enabled) {
-			console.log('[SmartPaste] Disabled, skipping');
+		// 手动模式下不劫持，让原生粘贴生效
+		if (this.settings.pasteMode !== 'auto') {
 			return;
 		}
 
-		// 检查粘贴目标是否在编辑器区域内
+		console.log('[SmartPaste] handlePaste triggered (capture phase, auto mode)');
+
+		// 检查粘贴目标是否在编辑器区域内（排除文件标题等特殊区域）
 		const target = evt.target as HTMLElement;
-		if (!target?.closest('.cm-editor, .markdown-source-view')) {
-			console.log('[SmartPaste] Not in editor area, skipping');
-			return;  // 不在编辑器内，让默认行为处理（如文件标题、搜索框等）
+		const isInEditor = target?.closest('.cm-editor, .markdown-source-view');
+		const isInTitle = target?.closest('.inline-title, .view-header-title-container');
+
+		if (!isInEditor || isInTitle) {
+			console.log('[SmartPaste] Not in editor content area, skipping');
+			return;  // 不在编辑器内容区，让默认行为处理
 		}
 
 		// 获取当前活跃的 MarkdownView
@@ -129,6 +142,65 @@ export default class SmartPastePlugin extends Plugin {
 		// 处理粘贴内容
 		const processed = this.processContent(contentToProcess, baseIndent, bulletPrefix);
 		console.log('[SmartPaste] processed result:', processed.substring(0, 200));
+		editor.replaceSelection(processed);
+	}
+
+	// ------------------------------------------------------------------------
+	//  手动智能粘贴（命令面板/快捷键触发）
+	// ------------------------------------------------------------------------
+
+	async executeSmartPaste(editor: Editor) {
+		console.log('[SmartPaste] executeSmartPaste triggered (manual mode)');
+
+		// 检测是否在代码块内
+		if (this.isInsideCodeBlock(editor)) {
+			// 代码块内直接粘贴纯文本
+			const text = await navigator.clipboard.readText();
+			editor.replaceSelection(text);
+			return;
+		}
+
+		// 获取当前行信息
+		const cursor = editor.getCursor();
+		const currentLine = editor.getLine(cursor.line);
+		const baseIndent = this.getLeadingWhitespace(currentLine);
+		const bulletPrefix = this.detectBulletPrefix(currentLine);
+
+		// 尝试读取 HTML 剪贴板（需要 clipboard-read 权限）
+		let clipboardHtml = '';
+		let clipboardText = '';
+
+		try {
+			const clipboardItems = await navigator.clipboard.read();
+			for (const item of clipboardItems) {
+				if (item.types.includes('text/html')) {
+					const blob = await item.getType('text/html');
+					clipboardHtml = await blob.text();
+				}
+				if (item.types.includes('text/plain')) {
+					const blob = await item.getType('text/plain');
+					clipboardText = await blob.text();
+				}
+			}
+		} catch (e) {
+			// 回退到纯文本
+			clipboardText = await navigator.clipboard.readText();
+		}
+
+		if (!clipboardText && !clipboardHtml) {
+			console.log('[SmartPaste] No clipboard content');
+			return;
+		}
+
+		// 处理内容
+		let contentToProcess: string;
+		if (clipboardHtml) {
+			contentToProcess = this.htmlToMarkdown(clipboardHtml);
+		} else {
+			contentToProcess = clipboardText;
+		}
+
+		const processed = this.processContent(contentToProcess, baseIndent, bulletPrefix);
 		editor.replaceSelection(processed);
 	}
 
@@ -503,14 +575,16 @@ class SmartPasteSettingTab extends PluginSettingTab {
 
 		containerEl.createEl('h2', { text: 'Smart Paste Settings' });
 
-		// 启用开关
+		// 粘贴模式
 		new Setting(containerEl)
-			.setName('Enable Smart Paste')
-			.setDesc('Toggle intelligent paste with preserved indentation')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.enabled)
-				.onChange(async (value) => {
-					this.plugin.settings.enabled = value;
+			.setName('Paste Mode')
+			.setDesc('Auto: hijack all paste events. Manual: use Cmd+Shift+V or command palette.')
+			.addDropdown(dropdown => dropdown
+				.addOption('manual', 'Manual (safer)')
+				.addOption('auto', 'Auto (experimental)')
+				.setValue(this.plugin.settings.pasteMode)
+				.onChange(async (value: 'auto' | 'manual') => {
+					this.plugin.settings.pasteMode = value;
 					await this.plugin.saveSettings();
 				}));
 
