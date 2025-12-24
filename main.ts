@@ -119,6 +119,13 @@ export default class SmartPastePlugin extends Plugin {
 			return;
 		}
 
+		// 检测到表格，跳过处理，使用纯文本
+		if (clipboardHtml?.includes('<table')) {
+			console.log('[SmartPaste] Table detected, using plain text');
+			editor.replaceSelection(clipboardText || '');
+			return;
+		}
+
 		// 获取当前行信息
 		const cursor = editor.getCursor();
 		const currentLine = editor.getLine(cursor.line);
@@ -189,6 +196,13 @@ export default class SmartPastePlugin extends Plugin {
 
 		if (!clipboardText && !clipboardHtml) {
 			console.log('[SmartPaste] No clipboard content');
+			return;
+		}
+
+		// 检测到表格，跳过处理，使用纯文本
+		if (clipboardHtml?.includes('<table')) {
+			console.log('[SmartPaste] Table detected, using plain text');
+			editor.replaceSelection(clipboardText || '');
 			return;
 		}
 
@@ -288,6 +302,24 @@ export default class SmartPastePlugin extends Plugin {
 						results.push(indent + '- ' + text);
 						prevWasParagraph = true;
 					}
+				} else if (tagName === 'img') {
+					// 图片转换 <img src="..." alt="..."> → ![alt](src)
+					const src = el.getAttribute('src');
+					const alt = el.getAttribute('alt') || '';
+					if (src) {
+						results.push(indent + `![${alt}](${src})`);
+					}
+					prevWasParagraph = false;
+				} else if (tagName === 'a') {
+					// 独立链接转换 <a href="url">text</a> → [text](url)
+					const href = el.getAttribute('href');
+					const linkText = this.getDirectTextContent(el);
+					if (href && linkText) {
+						results.push(indent + `- [${linkText}](${href})`);
+					} else if (linkText) {
+						results.push(indent + '- ' + linkText);
+					}
+					prevWasParagraph = true;
 				} else {
 					// 其他元素：递归处理
 					const inner = this.convertNodeToMarkdown(el, depth);
@@ -346,6 +378,15 @@ export default class SmartPastePlugin extends Plugin {
 					text += '*' + childEl.textContent + '*';
 				} else if (tag === 'code') {
 					text += '`' + childEl.textContent + '`';
+				} else if (tag === 'a') {
+					// 链接转换 <a href="url">text</a> → [text](url)
+					const href = childEl.getAttribute('href');
+					const linkText = this.getDirectTextContent(childEl);
+					if (href && linkText) {
+						text += `[${linkText}](${href})`;
+					} else {
+						text += linkText || '';
+					}
 				} else if (tag !== 'ul' && tag !== 'ol') {
 					text += this.getDirectTextContent(childEl);  // 递归处理，保留格式
 				}

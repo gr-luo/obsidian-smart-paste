@@ -95,6 +95,11 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
       editor.replaceSelection(clipboardText || "");
       return;
     }
+    if (clipboardHtml?.includes("<table")) {
+      console.log("[SmartPaste] Table detected, using plain text");
+      editor.replaceSelection(clipboardText || "");
+      return;
+    }
     const cursor = editor.getCursor();
     const currentLine = editor.getLine(cursor.line);
     const baseIndent = this.getLeadingWhitespace(currentLine);
@@ -145,6 +150,11 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
     }
     if (!clipboardText && !clipboardHtml) {
       console.log("[SmartPaste] No clipboard content");
+      return;
+    }
+    if (clipboardHtml?.includes("<table")) {
+      console.log("[SmartPaste] Table detected, using plain text");
+      editor.replaceSelection(clipboardText || "");
       return;
     }
     let contentToProcess;
@@ -225,6 +235,22 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
             results.push(indent + "- " + text);
             prevWasParagraph = true;
           }
+        } else if (tagName === "img") {
+          const src = el.getAttribute("src");
+          const alt = el.getAttribute("alt") || "";
+          if (src) {
+            results.push(indent + `![${alt}](${src})`);
+          }
+          prevWasParagraph = false;
+        } else if (tagName === "a") {
+          const href = el.getAttribute("href");
+          const linkText = this.getDirectTextContent(el);
+          if (href && linkText) {
+            results.push(indent + `- [${linkText}](${href})`);
+          } else if (linkText) {
+            results.push(indent + "- " + linkText);
+          }
+          prevWasParagraph = true;
         } else {
           const inner = this.convertNodeToMarkdown(el, depth);
           if (inner) {
@@ -274,6 +300,14 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
           text += "*" + childEl.textContent + "*";
         } else if (tag === "code") {
           text += "`" + childEl.textContent + "`";
+        } else if (tag === "a") {
+          const href = childEl.getAttribute("href");
+          const linkText = this.getDirectTextContent(childEl);
+          if (href && linkText) {
+            text += `[${linkText}](${href})`;
+          } else {
+            text += linkText || "";
+          }
         } else if (tag !== "ul" && tag !== "ol") {
           text += this.getDirectTextContent(childEl);
         }
