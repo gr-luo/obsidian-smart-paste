@@ -1,6 +1,6 @@
 # Smart Paste for Obsidian
 
-An Obsidian plugin that intelligently pastes content with preserved indentation hierarchy and inline formatting.
+An Obsidian plugin that intelligently pastes content with preserved indentation hierarchy, inline formatting, and automatic bullet point inheritance.
 
 ## The Problem
 
@@ -8,7 +8,8 @@ When pasting content from AI assistants (ChatGPT, Claude), websites, or other ma
 
 - **Indentation breaks** - Nested lists lose their hierarchy
 - **Extra empty lines** - Unwanted blank lines appear between bullet points
-- **Formatting lost** - Bold, italic, and code formatting disappears
+- **Formatting lost** - Bold, italic, code, links, and images disappear
+- **No bullet inheritance** - Multi-line text doesn't auto-convert to bullet lists
 
 ## The Solution
 
@@ -16,8 +17,9 @@ Smart Paste intercepts paste events and:
 
 1. **Preserves relative indentation** - Pasted content inherits the current cursor's indent level
 2. **Maintains hierarchy** - Nested lists stay nested
-3. **Keeps inline formatting** - `**bold**`, `*italic*`, and `` `code` `` are preserved
+3. **Keeps inline formatting** - `**bold**`, `*italic*`, `` `code` ``, `[links](url)`, and `![images](src)` are preserved
 4. **Cleans empty lines** - Removes extra blank lines between bullets
+5. **Auto-inherits bullets** - When pasting into a bullet line, each line becomes a bullet
 
 ## Demo
 
@@ -33,6 +35,19 @@ Smart Paste intercepts paste events and:
 - Parent item
   - Child item 1  ← Preserved!
   - Child item 2  ← Preserved!
+```
+
+**Auto-inherit bullets** - Paste plain text into `- `:
+```
+Input (plain text):
+Line 1
+Line 2
+Line 3
+
+Output (when cursor is at "- "):
+- Line 1
+- Line 2
+- Line 3
 ```
 
 ## Installation
@@ -58,10 +73,34 @@ npm run build
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| Enable Smart Paste | On | Toggle the plugin on/off |
+| Paste Mode | Manual | `Manual`: use command/hotkey for smart paste. `Auto`: hijack all paste events |
 | Clean Empty Lines | On | Remove extra blank lines between bullets |
 | Indent Style | Auto | Choose: Auto detect / Tab / Spaces |
 | Spaces per Indent | 2 | Number of spaces per indent level |
+
+## Usage
+
+### Manual Mode (Default, Recommended)
+
+- **Cmd+V** - Normal paste (native Obsidian behavior)
+- **Command Palette** → "Smart Paste: Paste with Smart Formatting" - Smart paste
+- Set a custom hotkey (e.g., `Cmd+Shift+V`) in Settings → Hotkeys
+
+### Auto Mode (Experimental)
+
+- **Cmd+V** - All pastes are automatically processed with smart formatting
+
+## Features
+
+| Content | Conversion |
+|---------|------------|
+| Lists `<ul>/<ol>` | Smart indentation preserved |
+| Links `<a href>` | `[text](url)` |
+| Images `<img>` | `![alt](src)` |
+| Bold `<strong>` | `**text**` |
+| Italic `<em>` | `*text*` |
+| Code `<code>` | `` `text` `` |
+| Tables `<table>` | Skipped (uses plain text) |
 
 ## How It Works
 
@@ -69,6 +108,7 @@ npm run build
 2. **Reads HTML clipboard** (`text/html`) to preserve structure
 3. **Converts HTML to Markdown** with proper indentation
 4. **Applies relative indentation** based on cursor position
+5. **Auto-inherits bullet prefix** when pasting multi-line text
 
 ### Technical Details
 
@@ -76,6 +116,7 @@ npm run build
 - Parses HTML with `DOMParser` for accurate hierarchy detection
 - Tracks `prevWasParagraph` state for correct list indentation
 - Recursively processes inline elements to preserve formatting
+- Detects tables and skips processing to avoid corruption
 
 ## Compatibility
 
@@ -84,8 +125,8 @@ npm run build
 
 ## Known Limitations
 
-- Tables are not specially handled (yet)
-- Images in clipboard are passed through without processing
+- Tables are skipped (plain text fallback)
+- Complex nested HTML structures may not convert perfectly
 
 ## Development
 
