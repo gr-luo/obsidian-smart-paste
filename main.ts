@@ -77,12 +77,15 @@ export default class SmartPastePlugin extends Plugin {
 
 		console.log('[SmartPaste] handlePaste triggered (capture phase, auto mode)');
 
-		// 检查粘贴目标是否在编辑器区域内（排除文件标题等特殊区域）
+		// 检查粘贴目标是否在编辑器区域内（排除文件标题、Property等特殊区域）
 		const target = evt.target as HTMLElement;
 		const isInEditor = target?.closest('.cm-editor, .markdown-source-view');
-		const isInTitle = target?.closest('.inline-title, .view-header-title-container');
+		const isInSpecialArea = target?.closest(
+			'.inline-title, .view-header-title-container, ' +
+			'.metadata-container, .metadata-properties, .frontmatter-container'
+		);
 
-		if (!isInEditor || isInTitle) {
+		if (!isInEditor || isInSpecialArea) {
 			console.log('[SmartPaste] Not in editor content area, skipping');
 			return;  // 不在编辑器内容区，让默认行为处理
 		}
@@ -447,6 +450,11 @@ export default class SmartPastePlugin extends Plugin {
 		const cleaned = this.settings.cleanEmptyLines
 			? this.cleanEmptyLines(processedLines)
 			: processedLines;
+
+		// 过滤开头的空行，避免换行粘贴
+		while (cleaned.length > 0 && cleaned[0] === '') {
+			cleaned.shift();
+		}
 
 		return cleaned.join('\n');
 	}

@@ -69,8 +69,10 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
     console.log("[SmartPaste] handlePaste triggered (capture phase, auto mode)");
     const target = evt.target;
     const isInEditor = target?.closest(".cm-editor, .markdown-source-view");
-    const isInTitle = target?.closest(".inline-title, .view-header-title-container");
-    if (!isInEditor || isInTitle) {
+    const isInSpecialArea = target?.closest(
+      ".inline-title, .view-header-title-container, .metadata-container, .metadata-properties, .frontmatter-container"
+    );
+    if (!isInEditor || isInSpecialArea) {
       console.log("[SmartPaste] Not in editor content area, skipping");
       return;
     }
@@ -354,6 +356,9 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
       }
     });
     const cleaned = this.settings.cleanEmptyLines ? this.cleanEmptyLines(processedLines) : processedLines;
+    while (cleaned.length > 0 && cleaned[0] === "") {
+      cleaned.shift();
+    }
     return cleaned.join("\n");
   }
   // 检测内容是否以 bullet 开头
