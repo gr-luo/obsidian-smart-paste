@@ -344,6 +344,12 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
         }
         return content;
       } else {
+        if (bulletPrefix) {
+          if (this.startsWithBullet(content)) {
+            return baseIndent + relativeIndent + content;
+          }
+          return baseIndent + relativeIndent + bulletPrefix + content;
+        }
         return baseIndent + relativeIndent + content;
       }
     });

@@ -430,7 +430,15 @@ export default class SmartPastePlugin extends Plugin {
 				}
 				return content;
 			} else {
-				// 后续行：baseIndent + 相对缩进 + 内容
+				// 后续行：如果当前环境有 bullet
+				if (bulletPrefix) {
+					// 如果内容已有 bullet，保留原样
+					if (this.startsWithBullet(content)) {
+						return baseIndent + relativeIndent + content;
+					}
+					// 否则自动加上 bullet（保留相对缩进）
+					return baseIndent + relativeIndent + bulletPrefix + content;
+				}
 				return baseIndent + relativeIndent + content;
 			}
 		});
