@@ -123,6 +123,13 @@ npm run build
 - Obsidian v1.0.0+
 - Desktop and Mobile
 
+## Excluded Areas
+
+Smart Paste automatically skips these areas (native paste behavior):
+- File title
+- Property/Metadata (frontmatter) section
+- Code blocks
+
 ## Known Limitations
 
 - Tables are skipped (plain text fallback)
