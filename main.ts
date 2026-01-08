@@ -13,6 +13,7 @@ interface SmartPasteSettings {
 	cleanTerminalOutput: boolean;
 	autoDetectTerminal: boolean;
 	fixHardLineBreaks: boolean;
+	removeEmptyLines: boolean;
 }
 
 const DEFAULT_SETTINGS: SmartPasteSettings = {
@@ -23,7 +24,8 @@ const DEFAULT_SETTINGS: SmartPasteSettings = {
 	// Terminal output cleaning
 	cleanTerminalOutput: true,
 	autoDetectTerminal: true,
-	fixHardLineBreaks: true
+	fixHardLineBreaks: true,
+	removeEmptyLines: true  // 大纲场景默认移除空行
 };
 
 // ============================================================================
@@ -698,90 +700,72 @@ export default class SmartPastePlugin extends Plugin {
 	 * 清理终端输出的格式问题
 	 */
 	cleanTerminalOutputText(text: string): string {
-		let result = text;
+		let lines = text.split('\n');
 
 		// Step 1: 去掉每行尾部的空格
-		result = result.split('\n')
-			.map(line => line.replace(/\s+$/, ''))
-			.join('\n');
+		lines = lines.map(line => line.replace(/\s+$/, ''));
 
 		// Step 2: 去掉统一的行首空格（找到最小公共缩进并移除）
-		const lines = result.split('\n');
 		const nonEmptyLines = lines.filter(l => l.trim().length > 0);
-
 		if (nonEmptyLines.length > 0) {
-			// 找最小行首空格数
 			let minLeadingSpaces = Infinity;
 			for (const line of nonEmptyLines) {
 				const match = line.match(/^( *)/);
-				if (match) {
-					const spaces = match[1].length;
-					if (spaces < minLeadingSpaces) {
-						minLeadingSpaces = spaces;
-					}
+				if (match && match[1].length < minLeadingSpaces) {
+					minLeadingSpaces = match[1].length;
 				}
 			}
-
-			// 如果有统一的行首空格（1-4个），移除它们
-			if (minLeadingSpaces > 0 && minLeadingSpaces <= 4) {
-				result = lines
-					.map(line => {
-						if (line.trim().length === 0) return '';
-						return line.slice(minLeadingSpaces);
-					})
-					.join('\n');
+			if (minLeadingSpaces > 0 && minLeadingSpaces < Infinity) {
+				lines = lines.map(line => {
+					if (line.trim().length === 0) return '';
+					return line.slice(minLeadingSpaces);
+				});
 			}
 		}
 
-		// Step 3: 标准化 bullet point 的缩进
-		// 将空格缩进转换为 tab，或者去掉不必要的缩进
-		result = this.normalizeBulletIndent(result);
-
-		// Step 4: 修复硬换行（单词中间被截断的情况）
-		if (this.settings.fixHardLineBreaks) {
-			result = this.fixHardLineBreaks(result);
-		}
-
-		// Step 5: 标准化空行（保留段落分隔，但不超过1个空行）
-		result = result.replace(/\n{3,}/g, '\n\n');
-
-		console.log('[SmartPaste] Terminal output cleaned');
-		return result;
-	}
-
-	/**
-	 * 标准化 bullet point 的缩进
-	 * - 顶层 bullet 应该没有缩进
-	 * - 嵌套 bullet 用 tab 缩进
-	 */
-	normalizeBulletIndent(text: string): string {
-		const lines = text.split('\n');
-		const result: string[] = [];
-
-		for (const line of lines) {
-			// 空行保留
-			if (line.trim().length === 0) {
-				result.push('');
-				continue;
-			}
+		// Step 3: 标准化缩进 - 所有空格缩进转 tab，非 bullet 行去掉前导空格
+		lines = lines.map(line => {
+			if (line.trim().length === 0) return '';
 
 			// 检测是否是 bullet point 行
 			const bulletMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
 			if (bulletMatch) {
 				const [, indent, bullet, content] = bulletMatch;
-				// 计算缩进层级（每 2-4 个空格 = 1 个 tab）
-				const spaceCount = indent.length;
-				const tabCount = Math.floor(spaceCount / 2);  // 2 空格 = 1 层
-				const newIndent = '\t'.repeat(tabCount);
-				result.push(`${newIndent}${bullet} ${content}`);
+				// 计算缩进层级（每 2 个空格 = 1 个 tab）
+				const spaceCount = indent.replace(/\t/g, '  ').length;  // tab 也算 2 空格
+				const tabCount = Math.floor(spaceCount / 2);
+				return '\t'.repeat(tabCount) + bullet + ' ' + content;
 			} else {
-				// 非 bullet 行，去掉前导空格（保留 tab）
-				const trimmed = line.replace(/^[ ]+/, '');
-				result.push(trimmed);
+				// 非 bullet 行，去掉所有前导空格
+				return line.trimStart();
 			}
+		});
+
+		// Step 4: 修复硬换行
+		if (this.settings.fixHardLineBreaks) {
+			const joined = this.fixHardLineBreaks(lines.join('\n'));
+			lines = joined.split('\n');
 		}
 
-		return result.join('\n');
+		// Step 5: 处理空行
+		if (this.settings.removeEmptyLines) {
+			// 完全移除空行
+			lines = lines.filter(line => line.trim().length > 0);
+		} else {
+			// 只压缩连续空行为单个
+			const result: string[] = [];
+			let prevEmpty = false;
+			for (const line of lines) {
+				const isEmpty = line.trim().length === 0;
+				if (isEmpty && prevEmpty) continue;
+				result.push(isEmpty ? '' : line);
+				prevEmpty = isEmpty;
+			}
+			lines = result;
+		}
+
+		console.log('[SmartPaste] Terminal output cleaned');
+		return lines.join('\n');
 	}
 
 	/**
@@ -958,6 +942,16 @@ class SmartPasteSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.fixHardLineBreaks)
 				.onChange(async (value) => {
 					this.plugin.settings.fixHardLineBreaks = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Remove Empty Lines')
+			.setDesc('Remove all empty lines (recommended for outline/bullet note-taking)')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.removeEmptyLines)
+				.onChange(async (value) => {
+					this.plugin.settings.removeEmptyLines = value;
 					await this.plugin.saveSettings();
 				}));
 	}

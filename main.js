@@ -32,7 +32,9 @@ var DEFAULT_SETTINGS = {
   // Terminal output cleaning
   cleanTerminalOutput: true,
   autoDetectTerminal: true,
-  fixHardLineBreaks: true
+  fixHardLineBreaks: true,
+  removeEmptyLines: true
+  // 大纲场景默认移除空行
 };
 var SmartPastePlugin = class extends import_obsidian.Plugin {
   async onload() {
@@ -547,63 +549,58 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
    * 清理终端输出的格式问题
    */
   cleanTerminalOutputText(text) {
-    let result = text;
-    result = result.split("\n").map((line) => line.replace(/\s+$/, "")).join("\n");
-    const lines = result.split("\n");
+    let lines = text.split("\n");
+    lines = lines.map((line) => line.replace(/\s+$/, ""));
     const nonEmptyLines = lines.filter((l) => l.trim().length > 0);
     if (nonEmptyLines.length > 0) {
       let minLeadingSpaces = Infinity;
       for (const line of nonEmptyLines) {
         const match = line.match(/^( *)/);
-        if (match) {
-          const spaces = match[1].length;
-          if (spaces < minLeadingSpaces) {
-            minLeadingSpaces = spaces;
-          }
+        if (match && match[1].length < minLeadingSpaces) {
+          minLeadingSpaces = match[1].length;
         }
       }
-      if (minLeadingSpaces > 0 && minLeadingSpaces <= 4) {
-        result = lines.map((line) => {
+      if (minLeadingSpaces > 0 && minLeadingSpaces < Infinity) {
+        lines = lines.map((line) => {
           if (line.trim().length === 0)
             return "";
           return line.slice(minLeadingSpaces);
-        }).join("\n");
+        });
       }
     }
-    result = this.normalizeBulletIndent(result);
-    if (this.settings.fixHardLineBreaks) {
-      result = this.fixHardLineBreaks(result);
-    }
-    result = result.replace(/\n{3,}/g, "\n\n");
-    console.log("[SmartPaste] Terminal output cleaned");
-    return result;
-  }
-  /**
-   * 标准化 bullet point 的缩进
-   * - 顶层 bullet 应该没有缩进
-   * - 嵌套 bullet 用 tab 缩进
-   */
-  normalizeBulletIndent(text) {
-    const lines = text.split("\n");
-    const result = [];
-    for (const line of lines) {
-      if (line.trim().length === 0) {
-        result.push("");
-        continue;
-      }
+    lines = lines.map((line) => {
+      if (line.trim().length === 0)
+        return "";
       const bulletMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
       if (bulletMatch) {
         const [, indent, bullet, content] = bulletMatch;
-        const spaceCount = indent.length;
+        const spaceCount = indent.replace(/\t/g, "  ").length;
         const tabCount = Math.floor(spaceCount / 2);
-        const newIndent = "	".repeat(tabCount);
-        result.push(`${newIndent}${bullet} ${content}`);
+        return "	".repeat(tabCount) + bullet + " " + content;
       } else {
-        const trimmed = line.replace(/^[ ]+/, "");
-        result.push(trimmed);
+        return line.trimStart();
       }
+    });
+    if (this.settings.fixHardLineBreaks) {
+      const joined = this.fixHardLineBreaks(lines.join("\n"));
+      lines = joined.split("\n");
     }
-    return result.join("\n");
+    if (this.settings.removeEmptyLines) {
+      lines = lines.filter((line) => line.trim().length > 0);
+    } else {
+      const result = [];
+      let prevEmpty = false;
+      for (const line of lines) {
+        const isEmpty = line.trim().length === 0;
+        if (isEmpty && prevEmpty)
+          continue;
+        result.push(isEmpty ? "" : line);
+        prevEmpty = isEmpty;
+      }
+      lines = result;
+    }
+    console.log("[SmartPaste] Terminal output cleaned");
+    return lines.join("\n");
   }
   /**
    * 修复硬换行：当一行以小写字母/逗号结尾，下一行以小写字母开头时，合并为一行
@@ -697,6 +694,10 @@ var SmartPasteSettingTab = class extends import_obsidian.PluginSettingTab {
     }));
     new import_obsidian.Setting(containerEl).setName("Fix Hard Line Breaks").setDesc("Merge lines that were broken mid-sentence (e.g., at 80 columns)").addToggle((toggle) => toggle.setValue(this.plugin.settings.fixHardLineBreaks).onChange(async (value) => {
       this.plugin.settings.fixHardLineBreaks = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Remove Empty Lines").setDesc("Remove all empty lines (recommended for outline/bullet note-taking)").addToggle((toggle) => toggle.setValue(this.plugin.settings.removeEmptyLines).onChange(async (value) => {
+      this.plugin.settings.removeEmptyLines = value;
       await this.plugin.saveSettings();
     }));
   }
