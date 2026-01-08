@@ -571,15 +571,7 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
     lines = lines.map((line) => {
       if (line.trim().length === 0)
         return "";
-      const bulletMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
-      if (bulletMatch) {
-        const [, indent, bullet, content] = bulletMatch;
-        const spaceCount = indent.replace(/\t/g, "  ").length;
-        const tabCount = Math.floor(spaceCount / 2);
-        return "	".repeat(tabCount) + bullet + " " + content;
-      } else {
-        return line.trimStart();
-      }
+      return line.trimStart();
     });
     if (this.settings.fixHardLineBreaks) {
       const joined = this.fixHardLineBreaks(lines.join("\n"));
