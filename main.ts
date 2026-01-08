@@ -9,13 +9,21 @@ interface SmartPasteSettings {
 	cleanEmptyLines: boolean;
 	indentStyle: 'auto' | 'tab' | 'spaces';
 	spacesPerIndent: number;
+	// Terminal output cleaning
+	cleanTerminalOutput: boolean;
+	autoDetectTerminal: boolean;
+	fixHardLineBreaks: boolean;
 }
 
 const DEFAULT_SETTINGS: SmartPasteSettings = {
 	pasteMode: 'manual',  // 默认手动模式，更安全
 	cleanEmptyLines: true,
 	indentStyle: 'auto',
-	spacesPerIndent: 2
+	spacesPerIndent: 2,
+	// Terminal output cleaning
+	cleanTerminalOutput: true,
+	autoDetectTerminal: true,
+	fixHardLineBreaks: true
 };
 
 // ============================================================================
@@ -51,6 +59,19 @@ export default class SmartPastePlugin extends Plugin {
 				this.saveSettings();
 				const mode = this.settings.pasteMode === 'auto' ? '自动劫持' : '手动触发';
 				console.log(`[SmartPaste] 切换到${mode}模式`);
+			}
+		});
+
+		// 命令：清理终端输出并粘贴（强制清理，不检测）
+		this.addCommand({
+			id: 'clean-terminal-paste',
+			name: 'Paste and Clean Terminal Output',
+			editorCallback: async (editor) => {
+				const text = await navigator.clipboard.readText();
+				if (!text) return;
+
+				const cleaned = this.cleanTerminalOutputText(text);
+				editor.replaceSelection(cleaned);
 			}
 		});
 
@@ -111,6 +132,14 @@ export default class SmartPastePlugin extends Plugin {
 			return;
 		}
 
+		// 终端输出清理：检测并清理纯文本
+		let processedClipboardText = clipboardText || '';
+		if (this.settings.cleanTerminalOutput && processedClipboardText) {
+			if (this.detectTerminalOutput(processedClipboardText)) {
+				processedClipboardText = this.cleanTerminalOutputText(processedClipboardText);
+			}
+		}
+
 		// 阻止默认粘贴和事件传播
 		evt.preventDefault();
 		evt.stopPropagation();
@@ -118,14 +147,14 @@ export default class SmartPastePlugin extends Plugin {
 
 		// 检测是否在代码块内
 		if (this.isInsideCodeBlock(editor)) {
-			editor.replaceSelection(clipboardText || '');
+			editor.replaceSelection(processedClipboardText || '');
 			return;
 		}
 
 		// 检测到表格，跳过处理，使用纯文本
 		if (clipboardHtml?.includes('<table')) {
 			console.log('[SmartPaste] Table detected, using plain text');
-			editor.replaceSelection(clipboardText || '');
+			editor.replaceSelection(processedClipboardText || '');
 			return;
 		}
 
@@ -146,7 +175,7 @@ export default class SmartPastePlugin extends Plugin {
 			contentToProcess = this.htmlToMarkdown(clipboardHtml);
 			console.log('[SmartPaste] converted markdown:', contentToProcess.substring(0, 300));
 		} else {
-			contentToProcess = clipboardText || '';
+			contentToProcess = processedClipboardText || '';
 		}
 
 		// 处理粘贴内容
@@ -202,10 +231,18 @@ export default class SmartPastePlugin extends Plugin {
 			return;
 		}
 
+		// 终端输出清理：检测并清理纯文本
+		let processedClipboardText = clipboardText || '';
+		if (this.settings.cleanTerminalOutput && processedClipboardText) {
+			if (this.detectTerminalOutput(processedClipboardText)) {
+				processedClipboardText = this.cleanTerminalOutputText(processedClipboardText);
+			}
+		}
+
 		// 检测到表格，跳过处理，使用纯文本
 		if (clipboardHtml?.includes('<table')) {
 			console.log('[SmartPaste] Table detected, using plain text');
-			editor.replaceSelection(clipboardText || '');
+			editor.replaceSelection(processedClipboardText || '');
 			return;
 		}
 
@@ -214,7 +251,7 @@ export default class SmartPastePlugin extends Plugin {
 		if (clipboardHtml) {
 			contentToProcess = this.htmlToMarkdown(clipboardHtml);
 		} else {
-			contentToProcess = clipboardText;
+			contentToProcess = processedClipboardText;
 		}
 
 		const processed = this.processContent(contentToProcess, baseIndent, bulletPrefix);
@@ -602,6 +639,175 @@ export default class SmartPastePlugin extends Plugin {
 	}
 
 	// ------------------------------------------------------------------------
+	//  终端输出清理（Terminal Output Cleaning）
+	// ------------------------------------------------------------------------
+
+	/**
+	 * 检测文本是否像终端输出
+	 * 特征：
+	 * - 行首有 1-4 个空格的统一缩进
+	 * - 行尾有大量空格填充
+	 * - 行长度接近 80 或终端宽度
+	 */
+	detectTerminalOutput(text: string): boolean {
+		if (!this.settings.autoDetectTerminal) return false;
+
+		const lines = text.split('\n').filter(l => l.length > 0);
+		if (lines.length < 2) return false;
+
+		let leadingSpaceLines = 0;
+		let trailingSpaceLines = 0;
+		let consistentWidth = 0;
+
+		for (const line of lines) {
+			// 检测行首空格（1-4个）
+			if (/^[ ]{1,4}\S/.test(line)) {
+				leadingSpaceLines++;
+			}
+			// 检测行尾空格（3个以上）
+			if (/\s{3,}$/.test(line)) {
+				trailingSpaceLines++;
+			}
+			// 检测是否接近 80 列宽度
+			if (line.length >= 75 && line.length <= 85) {
+				consistentWidth++;
+			}
+		}
+
+		const totalLines = lines.length;
+		// 如果超过 50% 的行有这些特征，认为是终端输出
+		const isTerminal = (
+			(leadingSpaceLines / totalLines > 0.5) ||
+			(trailingSpaceLines / totalLines > 0.3) ||
+			(consistentWidth / totalLines > 0.5)
+		);
+
+		if (isTerminal) {
+			console.log('[SmartPaste] Detected terminal output:', {
+				leadingSpaceLines,
+				trailingSpaceLines,
+				consistentWidth,
+				totalLines
+			});
+		}
+
+		return isTerminal;
+	}
+
+	/**
+	 * 清理终端输出的格式问题
+	 */
+	cleanTerminalOutputText(text: string): string {
+		let result = text;
+
+		// Step 1: 去掉每行尾部的空格
+		result = result.split('\n')
+			.map(line => line.replace(/\s+$/, ''))
+			.join('\n');
+
+		// Step 2: 去掉统一的行首空格（找到最小公共缩进并移除）
+		const lines = result.split('\n');
+		const nonEmptyLines = lines.filter(l => l.trim().length > 0);
+
+		if (nonEmptyLines.length > 0) {
+			// 找最小行首空格数
+			let minLeadingSpaces = Infinity;
+			for (const line of nonEmptyLines) {
+				const match = line.match(/^( *)/);
+				if (match) {
+					const spaces = match[1].length;
+					if (spaces < minLeadingSpaces) {
+						minLeadingSpaces = spaces;
+					}
+				}
+			}
+
+			// 如果有统一的行首空格（1-4个），移除它们
+			if (minLeadingSpaces > 0 && minLeadingSpaces <= 4) {
+				result = lines
+					.map(line => {
+						if (line.trim().length === 0) return '';
+						return line.slice(minLeadingSpaces);
+					})
+					.join('\n');
+			}
+		}
+
+		// Step 3: 修复硬换行（单词中间被截断的情况）
+		if (this.settings.fixHardLineBreaks) {
+			result = this.fixHardLineBreaks(result);
+		}
+
+		// Step 4: 压缩多余的空行
+		result = result.replace(/\n{3,}/g, '\n\n');
+
+		console.log('[SmartPaste] Terminal output cleaned');
+		return result;
+	}
+
+	/**
+	 * 修复硬换行：当一行以小写字母/逗号结尾，下一行以小写字母开头时，合并为一行
+	 */
+	fixHardLineBreaks(text: string): string {
+		const lines = text.split('\n');
+		const result: string[] = [];
+		let buffer = '';
+
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			const trimmedLine = line.trim();
+
+			// 空行：输出 buffer 和空行
+			if (trimmedLine.length === 0) {
+				if (buffer) {
+					result.push(buffer);
+					buffer = '';
+				}
+				result.push('');
+				continue;
+			}
+
+			// 检测是否是列表项或特殊行（不合并）
+			const isSpecialLine = /^[-*+•]|\d+\.|^#+\s|^>|^```|^\|/.test(trimmedLine);
+
+			if (isSpecialLine) {
+				if (buffer) {
+					result.push(buffer);
+					buffer = '';
+				}
+				result.push(line);
+				continue;
+			}
+
+			// 如果 buffer 为空，开始新段落
+			if (!buffer) {
+				buffer = line;
+				continue;
+			}
+
+			// 判断是否应该合并
+			const prevEndsWithContinuation = /[a-z,，、]$/.test(buffer.trim());
+			const currStartsWithLower = /^[a-z]/.test(trimmedLine);
+			const prevEndsWithPunctuation = /[.!?。！？:：]$/.test(buffer.trim());
+
+			// 合并条件：上一行没有结束标点，且（上一行以小写/逗号结尾 或 当前行以小写开头）
+			if (!prevEndsWithPunctuation && (prevEndsWithContinuation || currStartsWithLower)) {
+				buffer = buffer + ' ' + trimmedLine;
+			} else {
+				result.push(buffer);
+				buffer = line;
+			}
+		}
+
+		// 输出剩余的 buffer
+		if (buffer) {
+			result.push(buffer);
+		}
+
+		return result.join('\n');
+	}
+
+	// ------------------------------------------------------------------------
 	//  设置
 	// ------------------------------------------------------------------------
 
@@ -680,6 +886,39 @@ class SmartPasteSettingTab extends PluginSettingTab {
 				.setDynamicTooltip()
 				.onChange(async (value) => {
 					this.plugin.settings.spacesPerIndent = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// Terminal Output Cleaning Section
+		containerEl.createEl('h3', { text: 'Terminal Output Cleaning' });
+
+		new Setting(containerEl)
+			.setName('Clean Terminal Output')
+			.setDesc('Remove extra whitespace from terminal/CLI output (leading spaces, trailing spaces, etc.)')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.cleanTerminalOutput)
+				.onChange(async (value) => {
+					this.plugin.settings.cleanTerminalOutput = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Auto-detect Terminal Output')
+			.setDesc('Automatically detect if pasted content looks like terminal output')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.autoDetectTerminal)
+				.onChange(async (value) => {
+					this.plugin.settings.autoDetectTerminal = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Fix Hard Line Breaks')
+			.setDesc('Merge lines that were broken mid-sentence (e.g., at 80 columns)')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.fixHardLineBreaks)
+				.onChange(async (value) => {
+					this.plugin.settings.fixHardLineBreaks = value;
 					await this.plugin.saveSettings();
 				}));
 	}

@@ -28,7 +28,11 @@ var DEFAULT_SETTINGS = {
   // 默认手动模式，更安全
   cleanEmptyLines: true,
   indentStyle: "auto",
-  spacesPerIndent: 2
+  spacesPerIndent: 2,
+  // Terminal output cleaning
+  cleanTerminalOutput: true,
+  autoDetectTerminal: true,
+  fixHardLineBreaks: true
 };
 var SmartPastePlugin = class extends import_obsidian.Plugin {
   async onload() {
@@ -50,6 +54,17 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
         this.saveSettings();
         const mode = this.settings.pasteMode === "auto" ? "\u81EA\u52A8\u52AB\u6301" : "\u624B\u52A8\u89E6\u53D1";
         console.log(`[SmartPaste] \u5207\u6362\u5230${mode}\u6A21\u5F0F`);
+      }
+    });
+    this.addCommand({
+      id: "clean-terminal-paste",
+      name: "Paste and Clean Terminal Output",
+      editorCallback: async (editor) => {
+        const text = await navigator.clipboard.readText();
+        if (!text)
+          return;
+        const cleaned = this.cleanTerminalOutputText(text);
+        editor.replaceSelection(cleaned);
       }
     });
     this.addSettingTab(new SmartPasteSettingTab(this.app, this));
@@ -90,16 +105,22 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
       console.log("[SmartPaste] No clipboard content, returning");
       return;
     }
+    let processedClipboardText = clipboardText || "";
+    if (this.settings.cleanTerminalOutput && processedClipboardText) {
+      if (this.detectTerminalOutput(processedClipboardText)) {
+        processedClipboardText = this.cleanTerminalOutputText(processedClipboardText);
+      }
+    }
     evt.preventDefault();
     evt.stopPropagation();
     console.log("[SmartPaste] Default prevented, processing...");
     if (this.isInsideCodeBlock(editor)) {
-      editor.replaceSelection(clipboardText || "");
+      editor.replaceSelection(processedClipboardText || "");
       return;
     }
     if (clipboardHtml?.includes("<table")) {
       console.log("[SmartPaste] Table detected, using plain text");
-      editor.replaceSelection(clipboardText || "");
+      editor.replaceSelection(processedClipboardText || "");
       return;
     }
     const cursor = editor.getCursor();
@@ -113,7 +134,7 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
       contentToProcess = this.htmlToMarkdown(clipboardHtml);
       console.log("[SmartPaste] converted markdown:", contentToProcess.substring(0, 300));
     } else {
-      contentToProcess = clipboardText || "";
+      contentToProcess = processedClipboardText || "";
     }
     const processed = this.processContent(contentToProcess, baseIndent, bulletPrefix);
     console.log("[SmartPaste] processed result:", processed.substring(0, 200));
@@ -154,16 +175,22 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
       console.log("[SmartPaste] No clipboard content");
       return;
     }
+    let processedClipboardText = clipboardText || "";
+    if (this.settings.cleanTerminalOutput && processedClipboardText) {
+      if (this.detectTerminalOutput(processedClipboardText)) {
+        processedClipboardText = this.cleanTerminalOutputText(processedClipboardText);
+      }
+    }
     if (clipboardHtml?.includes("<table")) {
       console.log("[SmartPaste] Table detected, using plain text");
-      editor.replaceSelection(clipboardText || "");
+      editor.replaceSelection(processedClipboardText || "");
       return;
     }
     let contentToProcess;
     if (clipboardHtml) {
       contentToProcess = this.htmlToMarkdown(clipboardHtml);
     } else {
-      contentToProcess = clipboardText;
+      contentToProcess = processedClipboardText;
     }
     const processed = this.processContent(contentToProcess, baseIndent, bulletPrefix);
     editor.replaceSelection(processed);
@@ -475,6 +502,128 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
     return inCodeBlock;
   }
   // ------------------------------------------------------------------------
+  //  终端输出清理（Terminal Output Cleaning）
+  // ------------------------------------------------------------------------
+  /**
+   * 检测文本是否像终端输出
+   * 特征：
+   * - 行首有 1-4 个空格的统一缩进
+   * - 行尾有大量空格填充
+   * - 行长度接近 80 或终端宽度
+   */
+  detectTerminalOutput(text) {
+    if (!this.settings.autoDetectTerminal)
+      return false;
+    const lines = text.split("\n").filter((l) => l.length > 0);
+    if (lines.length < 2)
+      return false;
+    let leadingSpaceLines = 0;
+    let trailingSpaceLines = 0;
+    let consistentWidth = 0;
+    for (const line of lines) {
+      if (/^[ ]{1,4}\S/.test(line)) {
+        leadingSpaceLines++;
+      }
+      if (/\s{3,}$/.test(line)) {
+        trailingSpaceLines++;
+      }
+      if (line.length >= 75 && line.length <= 85) {
+        consistentWidth++;
+      }
+    }
+    const totalLines = lines.length;
+    const isTerminal = leadingSpaceLines / totalLines > 0.5 || trailingSpaceLines / totalLines > 0.3 || consistentWidth / totalLines > 0.5;
+    if (isTerminal) {
+      console.log("[SmartPaste] Detected terminal output:", {
+        leadingSpaceLines,
+        trailingSpaceLines,
+        consistentWidth,
+        totalLines
+      });
+    }
+    return isTerminal;
+  }
+  /**
+   * 清理终端输出的格式问题
+   */
+  cleanTerminalOutputText(text) {
+    let result = text;
+    result = result.split("\n").map((line) => line.replace(/\s+$/, "")).join("\n");
+    const lines = result.split("\n");
+    const nonEmptyLines = lines.filter((l) => l.trim().length > 0);
+    if (nonEmptyLines.length > 0) {
+      let minLeadingSpaces = Infinity;
+      for (const line of nonEmptyLines) {
+        const match = line.match(/^( *)/);
+        if (match) {
+          const spaces = match[1].length;
+          if (spaces < minLeadingSpaces) {
+            minLeadingSpaces = spaces;
+          }
+        }
+      }
+      if (minLeadingSpaces > 0 && minLeadingSpaces <= 4) {
+        result = lines.map((line) => {
+          if (line.trim().length === 0)
+            return "";
+          return line.slice(minLeadingSpaces);
+        }).join("\n");
+      }
+    }
+    if (this.settings.fixHardLineBreaks) {
+      result = this.fixHardLineBreaks(result);
+    }
+    result = result.replace(/\n{3,}/g, "\n\n");
+    console.log("[SmartPaste] Terminal output cleaned");
+    return result;
+  }
+  /**
+   * 修复硬换行：当一行以小写字母/逗号结尾，下一行以小写字母开头时，合并为一行
+   */
+  fixHardLineBreaks(text) {
+    const lines = text.split("\n");
+    const result = [];
+    let buffer = "";
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmedLine = line.trim();
+      if (trimmedLine.length === 0) {
+        if (buffer) {
+          result.push(buffer);
+          buffer = "";
+        }
+        result.push("");
+        continue;
+      }
+      const isSpecialLine = /^[-*+•]|\d+\.|^#+\s|^>|^```|^\|/.test(trimmedLine);
+      if (isSpecialLine) {
+        if (buffer) {
+          result.push(buffer);
+          buffer = "";
+        }
+        result.push(line);
+        continue;
+      }
+      if (!buffer) {
+        buffer = line;
+        continue;
+      }
+      const prevEndsWithContinuation = /[a-z,，、]$/.test(buffer.trim());
+      const currStartsWithLower = /^[a-z]/.test(trimmedLine);
+      const prevEndsWithPunctuation = /[.!?。！？:：]$/.test(buffer.trim());
+      if (!prevEndsWithPunctuation && (prevEndsWithContinuation || currStartsWithLower)) {
+        buffer = buffer + " " + trimmedLine;
+      } else {
+        result.push(buffer);
+        buffer = line;
+      }
+    }
+    if (buffer) {
+      result.push(buffer);
+    }
+    return result.join("\n");
+  }
+  // ------------------------------------------------------------------------
   //  设置
   // ------------------------------------------------------------------------
   async loadSettings() {
@@ -507,6 +656,19 @@ var SmartPasteSettingTab = class extends import_obsidian.PluginSettingTab {
     }));
     new import_obsidian.Setting(containerEl).setName("Spaces per Indent").setDesc("Number of spaces per indent level (when using spaces)").addSlider((slider) => slider.setLimits(2, 8, 2).setValue(this.plugin.settings.spacesPerIndent).setDynamicTooltip().onChange(async (value) => {
       this.plugin.settings.spacesPerIndent = value;
+      await this.plugin.saveSettings();
+    }));
+    containerEl.createEl("h3", { text: "Terminal Output Cleaning" });
+    new import_obsidian.Setting(containerEl).setName("Clean Terminal Output").setDesc("Remove extra whitespace from terminal/CLI output (leading spaces, trailing spaces, etc.)").addToggle((toggle) => toggle.setValue(this.plugin.settings.cleanTerminalOutput).onChange(async (value) => {
+      this.plugin.settings.cleanTerminalOutput = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Auto-detect Terminal Output").setDesc("Automatically detect if pasted content looks like terminal output").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoDetectTerminal).onChange(async (value) => {
+      this.plugin.settings.autoDetectTerminal = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Fix Hard Line Breaks").setDesc("Merge lines that were broken mid-sentence (e.g., at 80 columns)").addToggle((toggle) => toggle.setValue(this.plugin.settings.fixHardLineBreaks).onChange(async (value) => {
+      this.plugin.settings.fixHardLineBreaks = value;
       await this.plugin.saveSettings();
     }));
   }
