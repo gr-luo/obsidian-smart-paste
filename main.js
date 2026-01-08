@@ -570,12 +570,40 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
         }).join("\n");
       }
     }
+    result = this.normalizeBulletIndent(result);
     if (this.settings.fixHardLineBreaks) {
       result = this.fixHardLineBreaks(result);
     }
     result = result.replace(/\n{3,}/g, "\n\n");
     console.log("[SmartPaste] Terminal output cleaned");
     return result;
+  }
+  /**
+   * 标准化 bullet point 的缩进
+   * - 顶层 bullet 应该没有缩进
+   * - 嵌套 bullet 用 tab 缩进
+   */
+  normalizeBulletIndent(text) {
+    const lines = text.split("\n");
+    const result = [];
+    for (const line of lines) {
+      if (line.trim().length === 0) {
+        result.push("");
+        continue;
+      }
+      const bulletMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+      if (bulletMatch) {
+        const [, indent, bullet, content] = bulletMatch;
+        const spaceCount = indent.length;
+        const tabCount = Math.floor(spaceCount / 2);
+        const newIndent = "	".repeat(tabCount);
+        result.push(`${newIndent}${bullet} ${content}`);
+      } else {
+        const trimmed = line.replace(/^[ ]+/, "");
+        result.push(trimmed);
+      }
+    }
+    return result.join("\n");
   }
   /**
    * 修复硬换行：当一行以小写字母/逗号结尾，下一行以小写字母开头时，合并为一行

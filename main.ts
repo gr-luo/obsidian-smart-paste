@@ -733,16 +733,55 @@ export default class SmartPastePlugin extends Plugin {
 			}
 		}
 
-		// Step 3: 修复硬换行（单词中间被截断的情况）
+		// Step 3: 标准化 bullet point 的缩进
+		// 将空格缩进转换为 tab，或者去掉不必要的缩进
+		result = this.normalizeBulletIndent(result);
+
+		// Step 4: 修复硬换行（单词中间被截断的情况）
 		if (this.settings.fixHardLineBreaks) {
 			result = this.fixHardLineBreaks(result);
 		}
 
-		// Step 4: 压缩多余的空行
+		// Step 5: 标准化空行（保留段落分隔，但不超过1个空行）
 		result = result.replace(/\n{3,}/g, '\n\n');
 
 		console.log('[SmartPaste] Terminal output cleaned');
 		return result;
+	}
+
+	/**
+	 * 标准化 bullet point 的缩进
+	 * - 顶层 bullet 应该没有缩进
+	 * - 嵌套 bullet 用 tab 缩进
+	 */
+	normalizeBulletIndent(text: string): string {
+		const lines = text.split('\n');
+		const result: string[] = [];
+
+		for (const line of lines) {
+			// 空行保留
+			if (line.trim().length === 0) {
+				result.push('');
+				continue;
+			}
+
+			// 检测是否是 bullet point 行
+			const bulletMatch = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+			if (bulletMatch) {
+				const [, indent, bullet, content] = bulletMatch;
+				// 计算缩进层级（每 2-4 个空格 = 1 个 tab）
+				const spaceCount = indent.length;
+				const tabCount = Math.floor(spaceCount / 2);  // 2 空格 = 1 层
+				const newIndent = '\t'.repeat(tabCount);
+				result.push(`${newIndent}${bullet} ${content}`);
+			} else {
+				// 非 bullet 行，去掉前导空格（保留 tab）
+				const trimmed = line.replace(/^[ ]+/, '');
+				result.push(trimmed);
+			}
+		}
+
+		return result.join('\n');
 	}
 
 	/**
