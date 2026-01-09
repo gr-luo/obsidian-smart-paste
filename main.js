@@ -568,10 +568,20 @@ var SmartPastePlugin = class extends import_obsidian.Plugin {
         });
       }
     }
-    lines = lines.map((line) => {
+    const linesWithIndent = lines.map((line) => {
       if (line.trim().length === 0)
+        return { indent: 0, content: "" };
+      const match = line.match(/^(\s*)/);
+      const spaces = match ? match[1].length : 0;
+      return { indent: spaces, content: line.slice(spaces) };
+    });
+    const nonZeroIndents = linesWithIndent.filter((l) => l.indent > 0 && l.content.length > 0).map((l) => l.indent);
+    const indentUnit = nonZeroIndents.length > 0 ? Math.min(...nonZeroIndents) : 2;
+    lines = linesWithIndent.map((l) => {
+      if (l.content.length === 0)
         return "";
-      return line.trimStart();
+      const tabCount = Math.floor(l.indent / indentUnit);
+      return "	".repeat(tabCount) + l.content;
     });
     if (this.settings.fixHardLineBreaks) {
       const joined = this.fixHardLineBreaks(lines.join("\n"));

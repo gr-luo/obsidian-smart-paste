@@ -723,11 +723,26 @@ export default class SmartPastePlugin extends Plugin {
 			}
 		}
 
-		// Step 3: 标准化缩进 - 去掉所有前导空格，bullet 也顶格
-		lines = lines.map(line => {
-			if (line.trim().length === 0) return '';
-			// 直接去掉所有前导空格，让所有内容顶格
-			return line.trimStart();
+		// Step 3: 将空格缩进转换为 tab（保留相对层级）
+		// 先计算相对缩进的基准
+		const linesWithIndent = lines.map(line => {
+			if (line.trim().length === 0) return { indent: 0, content: '' };
+			const match = line.match(/^(\s*)/);
+			const spaces = match ? match[1].length : 0;
+			return { indent: spaces, content: line.slice(spaces) };
+		});
+
+		// 找到最小非零缩进作为一个层级的单位（通常是 2 或 4）
+		const nonZeroIndents = linesWithIndent
+			.filter(l => l.indent > 0 && l.content.length > 0)
+			.map(l => l.indent);
+		const indentUnit = nonZeroIndents.length > 0 ? Math.min(...nonZeroIndents) : 2;
+
+		// 转换为 tab 缩进
+		lines = linesWithIndent.map(l => {
+			if (l.content.length === 0) return '';
+			const tabCount = Math.floor(l.indent / indentUnit);
+			return '\t'.repeat(tabCount) + l.content;
 		});
 
 		// Step 4: 修复硬换行
